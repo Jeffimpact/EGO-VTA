@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ego-vta"
+version = "0.1.0"
+description = "Calibrated first-person video and wearable telemetry to auditable manipulation episodes"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26,<3", "scipy>=1.11,<2", "av>=14,<21",
+    "h5py>=3.10,<4", "opencv-contrib-python>=4.9,<4.14",
+    "tokenizers>=0.20,<1", "mcap-ros2-support>=0.5,<1"
+]
+
+[project.optional-dependencies]
+tracking = ["mediapipe==0.10.32", "pillow>=10"]
+lerobot = ["lerobot[dataset]==0.7.0"]
+dashboard = ["streamlit>=1.40,<2", "plotly>=5.20,<7"]
+s3 = ["fsspec>=2024.6", "s3fs>=2024.6"]
+
+[project.scripts]
+ego-vta = "ego_action.cli:main"
+ego-vta-clip = "ego_action.clip:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ego_action = ["inspector.html"]
