@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>$TITLE · Episode review</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f5f2;color:#182625;font:15px/1.5 Inter,system-ui,sans-serif}main{max-width:1160px;margin:auto;padding:32px clamp(14px,4vw,46px)}
+header{border-bottom:1px solid #c7ceca;padding-bottom:18px}header p{margin:0;color:#47645b}h1{margin:6px 0 2px;font-size:clamp(25px,4vw,43px);line-height:1.12;letter-spacing:-.04em}h2{font-size:18px;margin:0}small{color:#50645d}
+.summary{display:flex;flex-wrap:wrap;gap:16px 36px;margin:20px 0}.summary div{display:grid}.summary b{font:600 23px/1.2 ui-monospace,monospace}.summary span{font-size:13px;color:#52605c}
+.panes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}.panel{background:white;border-radius:8px;border:1px solid #d2d9d3;overflow:hidden;min-width:0}
+.panel h2{padding:12px 16px;border-bottom:1px solid #d2d9d3}.stage{background:#192524;text-align:center;width:100%;height:330px}video{height:100%;width:100%;object-fit:contain}#trajectory{height:330px}
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:14px 0 4px}.bar input{flex:1;min-width:140px;accent-color:#116553}.bar button{background:#184a40;color:white;border:0;border-radius:5px;padding:7px 16px;cursor:pointer}.bar output{font:14px ui-monospace,monospace;min-width:84px}
+#instruction{font-size:20px;margin:10px 0 0;font-weight:600}#sample,#quality{color:#4c5d57;margin:4px 0} .signals{margin-top:16px}#signals{height:170px}
+@media(max-width:740px){.panes{grid-template-columns:1fr}.stage,#trajectory{height:250px}main{padding-top:16px}.summary{gap:10px 21px}.summary b{font-size:19px}}
+</style><script>$PLOTLY</script></head><body><main><header><p>$SOURCE · $TITLE</p><h1>$TASK</h1><small>Pose reference · $REF</small></header>
+<div class="summary"><div><b>$FRAMES</b><span>Observation frames</span></div><div><b>$ROWS</b><span>Training rows</span></div><div><b>Tier $TIER</b><span>Quality grade</span></div><div><b>$SCORE / 100</b><span>Weighted score</span></div></div>
+<div class="panes"><section class="panel"><h2>First-person view</h2><div class="stage"><video id="video" preload="auto" playsinline muted controls src="data:video/mp4;base64,$VIDEO"></video></div></section>
+<section class="panel"><h2>Wrist trajectory</h2><div id="trajectory"></div></section></div>
+<div class="bar"><button id="play" type="button">Play</button><label for="cursor">Frame</label><input id="cursor" type="range" min="0" step="1" value="0"><output id="frame"></output></div>
+<p id="instruction"></p><p id="sample"></p><p id="quality">$REASONS</p>
+<section class="panel signals"><h2>Grasp aperture and wrist speed</h2><div id="signals"></div></section></main>
+<script>
+const d=$PAYLOAD;
+const n=d.segment.length, v=document.getElementById('video'), c=document.getElementById('cursor'), play=document.getElementById('play');
+const traj=document.getElementById('trajectory'), sig=document.getElementById('signals'), t=Array.from({length:n},(_,i)=>i/d.fps);
+c.max=n-1;
+const theme={font:{family:'Inter, system-ui, sans-serif',color:'#374a42'},paper_bgcolor:'#fff',plot_bgcolor:'#fff',margin:{t:10,r:8,b:10,l:20}};
+const config={displayModeBar:false,responsive:true};
+function axis(s){return {title:{text:s+' (m)'},nticks:4,backgroundcolor:'#f3f6f4',gridcolor:'#cbd8d0',showbackground:true};}
+const pathTrace={type:'scatter3d',mode:'lines',x:d.x_m,y:d.y_m,z:d.z_m,connectgaps:false,line:{color:'#438974',width:5},hoverinfo:'skip'};
+const dot={type:'scatter3d',mode:'markers',x:[d.x_m[0]],y:[d.y_m[0]],z:[d.z_m[0]],marker:{size:5,color:'#dc6b3a'},hoverinfo:'skip'};
+const ready=Promise.all([
+ Plotly.newPlot(traj,[pathTrace,dot],{...theme,showlegend:false,scene:{xaxis:axis('x'),yaxis:axis('y'),zaxis:axis('z'),aspectmode:'data'},uirevision:'preserve'},config),
+ Plotly.newPlot(sig,[{x:t,y:d.aperture,name:'Aperture (0–1)',mode:'lines',line:{color:'#297a64'}},{x:t,y:d.speed_m_s,name:'Speed (m/s)',yaxis:'y2',mode:'lines',line:{color:'#b66342'}}],
+ {...theme,margin:{t:12,b:34,l:40,r:40},xaxis:{title:{text:'Seconds'}},yaxis:{range:[0,1.03]},yaxis2:{overlaying:'y',side:'right',rangemode:'tozero'},legend:{orientation:'h',x:0,y:1.25},shapes:[{type:'line',x0:0,x1:0,y0:0,y1:1,yref:'paper',line:{color:'#354940',width:1}}]},config)]);
+let last=-1;
+function display(i){i=Math.max(0,Math.min(n-1,i));if(i===last)return;last=i;c.value=i;
+ document.getElementById('frame').textContent=(i+1)+' / '+n;
+ document.getElementById('instruction').textContent=d.instructions[d.segment[i]];
+ document.getElementById('sample').textContent='Source frame '+d.source[i]+' · '+(i/d.fps).toFixed(2)+' s · '+(d.problems[i].join(', ') || (d.usable[i]?'Eligible observation':'Review only'));
+ Plotly.restyle(traj,{x:[[d.x_m[i]]],y:[[d.y_m[i]]],z:[[d.z_m[i]]]},[1]);Plotly.relayout(sig,{'shapes[0].x0':i/d.fps,'shapes[0].x1':i/d.fps});}
+ready.then(()=>{display(0);c.oninput=()=>{const i=Number(c.value);v.pause();v.currentTime=(i+.05)/d.fps;display(i);};
+ function tick(){display(Math.floor(v.currentTime*d.fps+1e-5));if(!v.paused&&!v.ended)requestAnimationFrame(tick);}
+ v.onplay=()=>{play.textContent='Pause';tick();};v.onpause=()=>{play.textContent='Play';};v.onseeked=()=>display(Math.floor(v.currentTime*d.fps+1e-5));v.onended=()=>{play.textContent='Replay';};
+ play.onclick=()=>{if(v.paused||v.ended){if(v.ended)v.currentTime=0;v.play();}else{v.pause();}};
+ sig.on('plotly_click',ev=>{if(!ev.points.length)return; const i=ev.points[0].pointIndex;v.pause();v.currentTime=(i+.05)/d.fps;display(i);});});
+</script></body></html>
