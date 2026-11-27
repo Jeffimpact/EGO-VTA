@@ -6,13 +6,81 @@ EGO-VTA (Egocentric Video-to-Action) measures hand motion and pinch aperture in 
 
 The preview uses known synthetic landmarks to illustrate the output. The public-video measurements in the [build plan](BUILD_PLAN.md) use the CPU hand detector.
 
-## Start here with one phone video
+## Choose a first run
 
-The first milestone runs MediaPipe on CPU. Install Python 3.12 and the tracking extra in a virtual environment. No PyTorch, GPU, camera driver, or paid API is needed for this command.
+| You have | Run | What success looks like |
+| --- | --- | --- |
+| A clean CPU checkout | `ego-vta demo work/baseline` | Four seconds of synthetic moving-camera data produce 76 training rows, HDF5 and MCAP |
+| A phone or glasses MP4 | `ego-vta-clip` | Trace a selected hand through the diagnostic video and inspect the per-row masks in an accepted feature file |
+| A cloud CPU and no recording | `python tools/cloud_smoke.py` | Process the original EgoDex sticker and pour clips, reopen sticker tensors and reject the full pour clip with diagnostics |
+| A synchronized capture manifest | `ego-vta run` | Inspect coordinate frames, QC tier, valid spans, selected exports and the processing receipt |
+
+### Fresh install on Linux or macOS
+
+Start in the repository root. For a new checkout, run `git clone https://github.com/Jeffimpact/EGO-VTA.git` and `cd EGO-VTA`. Use Python 3.12 for the examples. On a minimal Debian/Ubuntu cloud image, provision the system libraries listed in the [Dockerfile](Dockerfile) during setup, including EGL, GLES, GL, GLib and PortAudio.
 
 ```sh
+python3.12 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e '.[tracking]'
-python -m src.pipeline.run --input my_clip.mp4 --seconds 15 --output-dir data/exports/first --gif
+ego-vta --help
+ego-vta demo work/baseline
+python -m unittest discover -s tests -v
+```
+
+Inspect `work/baseline/result/episode.json` for the tier, training rows and formats. Open `review.mp4` beside it. The test runner is Python's standard-library unittest. The native LeRobot reader test skips when that optional package is absent. For a second shell, reactivate the same virtual environment. Use a fresh output path when changing inputs or options.
+
+## Architecture and data flow
+
+```mermaid
+flowchart TD
+    V["One MP4"] --> C["Clip CLI"]
+    M["Capture manifest"] --> P["Manifest CLI"]
+    C --> I["Decode, align and track"]
+    P --> I
+    I --> F["Image features and adjacent deltas"]
+    I --> G["Reference-frame pose, telemetry and segments"]
+    F --> Q["Clip coverage and gap checks"]
+    G --> E["Quality tier and valid action windows"]
+    Q --> R["Diagnostic video and QC"]
+    Q -->|Accepted| H["Clip HDF5"]
+    E --> D["Episode review and receipt"]
+    E -->|Eligible spans| X["HDF5, MCAP or LeRobot"]
+```
+
+The clip CLI selects the feature branch and the manifest CLI selects the reference-frame branch. Both reuse the decoder and tracking code. In a rejected run, the review files explain which observations failed.
+
+| Modules under `src/ego_action/` | Responsibility and output |
+| --- | --- |
+| `cli.py`, `clip.py`, `pipeline.py` | Dispatch commands, orchestrate the clip or manifest job, and publish completed output directories |
+| `ingest.py`, `pose.py` | Decode presentation times, align cameras and sensors, estimate hand geometry and compute relative-pose targets |
+| `labels.py`, `quality.py` | Import or propose segment instructions, score evidence, flag bad frames and determine eligible spans |
+| `exporters.py` | Serialize manifest-route images, action chunks and metadata to the selected formats |
+| `review.py`, `inspector.html`, `streamlit_app.py` | Render synchronized video, trajectory, aperture and frame-level QC for inspection |
+| `demo.py`, `staging.py`, `monitor.py`, `common.py` | Generate known-motion fixtures, transfer versioned captures, emit live rig alerts, and supply shared I/O and validation helpers |
+
+### Repository and generated files
+
+| Path | Function |
+| --- | --- |
+| `pyproject.toml`, `Dockerfile` | Package requirements, optional dependencies, CLI entry points and Linux container setup |
+| `src/pipeline/run.py` | Repository-root compatibility entry point for the single-video CLI |
+| `tools/` | Download the EgoDex subset, compare aperture with independent labels and run the two-clip cloud smoke check |
+| `tests/` | Exercise clip masks, calibrated motion, reader agreement, quarantine, retries and staging |
+| `docs/`, `BUILD_PLAN.md` | Input and engineering contracts, pilot roadmap, synthetic preview and baseline measurements |
+| `data/raw/` | Downloaded public MP4s and paired reference HDF5s. The reference is used for evaluation |
+| `data/exports/cloud/{sticker,pour}/` | Per-clip diagnostic and QC. The accepted sticker folder also contains `episode.h5` |
+| `work/baseline/capture/` | Generated input manifest, synthetic video, telemetry, annotations and independent ground truth |
+| `work/baseline/result/` | Review MP4, frames CSV, episode metadata and receipt. Eligible synthetic exports live under `synthetic/tier-1/`. Failed episodes have `quarantine/diagnostics.json` |
+
+[Engineering specification](docs/ENGINEERING_SPECIFICATION.md) · [Next milestones and hardware decisions](docs/ROADMAP.md) · [Manifest fields and units](docs/INPUTS.md)
+
+## Process one phone video
+
+After the tracking install, run MediaPipe on CPU with a local recording.
+
+```sh
+ego-vta-clip --input my_clip.mp4 --seconds 15 --output-dir data/exports/first --gif
 ```
 
 Substitute any local MP4 for the input. A 15-second desk view of a hand pinching and lifting a pen is a suitable controlled test. Start with the phone stationary. Use a head- or chest-mounted phone for a separate moving-camera trial. The first run retrieves Google's pinned 7.8 MB hand model and verifies its checksum. To run offline, pass a pre-downloaded bundle with `--model path/to/hand_landmarker.task`. On Linux install the EGL and GLES runtime libraries if the MediaPipe wheel requests them.
@@ -52,6 +120,8 @@ python -m unittest discover -s tests -v
 python tools/cloud_smoke.py
 ```
 
+**Verified cloud run.** At commit `585f570` on Python 3.12.14, the tracking install passed 21 tests and skipped the optional reader. With LeRobot 0.7.0 installed, all 22 passed. The synthetic demo exported 76 anchors from 80 observations. The sticker clip had 295/300 valid hand rows and 291 valid transitions. The full pour clip had 90/127 valid hand rows and was rejected with a 36-row gap. The run decoded both diagnostic videos.
+
 For a Codex environment with offline execution, use the install command plus the following two commands in its network-enabled setup phase. The test and smoke commands then use the local files. A minimal Linux image needs `libgl1`, `libegl1` and `libgles2` for the tracker.
 
 ```sh
@@ -63,9 +133,9 @@ python -c 'from ego_action.clip import model_path; print(model_path(None))'
 
 Run `ego-vta demo sample` after installation to generate a four-second synthetic recording under `sample/capture` and its processed outputs under `sample/result`. Use `ego-vta demo sample --formats hdf5,mcap,lerobot` in a fresh directory with the LeRobot extra to exercise all three formats. The virtual camera moves independently of the hand. Open `sample/result/review.mp4` to see the recording and `sample/result/episode.json` to inspect the quality decision. `ground_truth.csv` is an independent test oracle and is never read by the pipeline.
 
-## Install and run
+## Optional exporters and dashboard
 
-Use Python 3.12 for all three exporters. The core supports Python 3.10 and later. On a Linux laptop, the following commands select CPU PyTorch wheels. The initial install needs internet access.
+Use Python 3.12 for all three exporters. The core supports Python 3.10 and later. On Linux with `uv` installed, the following commands select CPU PyTorch wheels. Run these in a fresh checkout or use a new environment name if you already created `.venv`. The initial install needs internet access.
 
 ```sh
 uv venv --python 3.12 .venv
@@ -102,7 +172,6 @@ The input contract, channel names, transforms, sensor units, and quality default
 
 ```python
 import h5py
-from lerobot.datasets import LeRobotDataset
 from pathlib import Path
 
 tier = Path("sample/result/synthetic/tier-1").resolve()
@@ -111,6 +180,13 @@ with h5py.File(tier / "episodes.h5") as f:
     images = ep["observation/image_primary"]
     actions = ep["action/chunk"]
     print(images.shape, actions.shape)   # (76, 3, 224, 224), (76, 4, 7)
+
+```
+
+After generating the optional LeRobot export in the same sample directory, continue in the same Python session.
+
+```python
+from lerobot.datasets import LeRobotDataset
 
 ds = LeRobotDataset("local/ego_action", root=tier / "lerobot", video_backend="pyav")
 frame = ds[0]
@@ -127,7 +203,7 @@ The default automatic labeler proposes transitions from grasp changes and speed 
 {"vlm": {"url": "http://127.0.0.1:8080/v1/chat/completions", "model": "local-vlm", "timeout_s": 90}}
 ```
 
-The CLI can stage immutable captures and retrieve them for processing. A versioned manifest appears after all input assets finish uploading. Retrieval checks each SHA-256 digest. Use an S3 URI with your own configured credentials and the `s3` extra, or use a local directory. These commands run the same staging flow entirely on disk.
+The CLI can stage immutable captures and retrieve them for processing. A versioned manifest appears after all input assets finish uploading. Retrieval checks each SHA-256 digest. Install `python -m pip install -e '.[s3]'` for staging support. Use a local directory or an S3 URI with your configured credentials. These commands run the same staging flow entirely on disk.
 
 ```sh
 uri=$(ego-vta stage sample/capture/episode.json work/staging)
@@ -139,7 +215,7 @@ For live rig feedback, the capture driver can pipe JSON lines to `ego-vta monito
 
 ## Reproducibility
 
-Each successful run contains the source hashes, selected exports and software version in `receipt.json`. An identical request reuses the result. Changed inputs require a new output directory. Failed processing leaves the input capture intact and publishes no partial dataset. Synthetic outputs use a distinct directory, and a quarantined recording produces review material and zero training rows.
+Each successful manifest run contains the source hashes, selected exports and software version in `receipt.json`. An identical request reuses the result. Changed inputs require a new output directory. Failed processing leaves the input capture intact and publishes no partial dataset. Synthetic outputs use a distinct directory, and a quarantined recording produces review material and zero training rows.
 
 For a containerized run from this directory:
 
@@ -149,3 +225,5 @@ docker run --rm -v "$PWD:/data" ego-vta demo /data/work/container-demo
 ```
 
 See [BUILD_PLAN.md](BUILD_PLAN.md) for the implementation milestones, acceptance results, and the hardware decisions for a real pilot.
+
+For the next pilot, record the same pinch-and-lift task with a fixed and a moving phone. Compare timing and coverage before choosing glasses, IMU/FMG or edge compute. Follow the [milestone roadmap](docs/ROADMAP.md) through calibration, simulation replay and physical evaluation.
